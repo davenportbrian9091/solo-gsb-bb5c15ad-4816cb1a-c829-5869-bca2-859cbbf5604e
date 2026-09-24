@@ -15,6 +15,12 @@
                           返回逐格恢复文本/一致性/指标与二维最严成功边界；
                           不改任务图片、攻击历史与检测归档
   POST /api/privacy-check  上传 PNG/JPEG -> 只读解析 EXIF 拍摄时间/相机/GPS（不落盘、不建任务）
+  POST /api/jobs/{id}/locate-source
+                          上传传播副本（裁切/缩放/JPEG 转存件）-> 以该任务
+                          watermarked.png 为参照做局部特征匹配 + RANSAC 来源定位：
+                          仅在内点数量/比例与投影四边形几何均可信时返回四角坐标、
+                          覆盖率与多边形标注预览；否则明确返回无法定位及原因；
+                          只读，不写任务文件与检测归档
   GET  /api/jobs/{id}/{kind}  任务文件下载（original/watermarked/target/marked）
   GET  /api/jobs/{id}/detections/{det_id}/{kind}  某次检测的输入快照 / 标注图
   POST /api/jobs/{id}/reports   选择一次或多次检测 -> 可验证 JSON 报告并追加归档
@@ -38,7 +44,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from . import archive, autostrength, dctwm as wm
-from . import exifcheck, matrix, orientation
+from . import exifcheck, locate, matrix, orientation
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -381,6 +387,53 @@ def robustness_matrix(job_id: str, req: RobustnessMatrixRequest):
         raise HTTPException(status_code=400, detail=str(e))
     result["job_id"] = job_id
     result["source"] = "watermarked.png（评测前只读快照，不被改写）"
+    return JSONResponse(result)
+
+
+@app.post("/api/jobs/{job_id}/locate-source")
+def locate_source(job_id: str, image: UploadFile = File(...)):
+    """传播副本来源定位（只读、全内存）。
+
+    以该任务的 watermarked.png 为参照，对上传的传播副本（经裁切 / 缩放 /
+    JPEG 转存）做 SIFT 局部特征匹配 + RANSAC 单应估计，仅在内点数量、内点
+    比例与投影四边形面积 / 边界 / 区域支撑均可信时返回四角坐标、覆盖率与
+    多边形标注预览；匹配不足或几何退化时返回 located=false 与具体原因
+    （HTTP 仍为 200），绝不返回伪位置。
+
+    只读：上传图不落盘，不写任务文件、meta、检测记录与归档。
+    """
+    _ensure_data_dir()
+    meta = _load_meta(job_id)
+    if meta.get("upload_only"):
+        raise HTTPException(status_code=404, detail="该任务没有含水印图。")
+    source = DATA_DIR / job_id / "watermarked.png"
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="该任务没有含水印图。")
+
+    data = image.file.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="图片不能超过 16MB。")
+    if not data:
+        raise HTTPException(status_code=400, detail="上传内容为空。")
+    try:
+        query = exifcheck.open_rgb_transposed(data)
+    except exifcheck.PrivacyCheckError:
+        raise HTTPException(status_code=400, detail="无法解析上传的图片。")
+    query_rgb = np.array(query)
+    h, w = query_rgb.shape[:2]
+    if max(h, w) > MAX_DIM:
+        raise HTTPException(
+            status_code=400,
+            detail=f"图片尺寸 {w}x{h} 超过 {MAX_DIM}px 上限，请先缩小。")
+
+    reference_rgb = np.array(Image.open(source).convert("RGB"))
+    try:
+        result = locate.locate_source(reference_rgb, query_rgb)
+    except locate.LocateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    result["job_id"] = job_id
+    result["source"] = "watermarked.png（只读参照，未被改写）"
+    result["stored"] = False
     return JSONResponse(result)
 
 

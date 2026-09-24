@@ -177,6 +177,40 @@
       </div>
     </section>
 
+    <section class="panel disabled" id="panel-locate">
+      <h2><span class="num">📍</span> 传播副本来源定位</h2>
+      <p class="muted">
+        选定当前任务后，上传一张<b>从本任务含水印图裁切、缩放或 JPEG 转存</b>得到的图片。
+        服务端以任务的 <code>watermarked.png</code> 为参照，使用 <b>SIFT 局部特征匹配 +
+        RANSAC 单应估计</b>求上传图四角在参照图中的位置；仅在<b>内点数量、内点比例与
+        投影四边形面积 / 边界均可信</b>时返回四角与覆盖率，否则明确提示「无法定位」及原因，
+        不会给出伪位置。全程<b>只读</b>：不写任务文件、不产生检测记录与归档。
+      </p>
+      <label class="field">
+        <span>传播副本（最短边 ≥ 64px，建议含足够画面纹理）</span>
+        <input type="file" id="locate-file" accept="image/png,image/jpeg,image/webp,image/bmp" />
+      </label>
+      <button class="primary" id="btn-locate">定位副本来源</button>
+      <div class="status" id="locate-status"></div>
+
+      <div id="locate-result" class="locate-box hidden">
+        <div id="locate-verdict" class="verdict"></div>
+        <div id="locate-reason" class="locate-reason"></div>
+
+        <div id="locate-detail" class="hidden">
+          <img id="locate-preview" class="locate-preview" alt="来源多边形标注预览" />
+          <dl class="metrics">
+            <dt>覆盖率（四边形面积 / 参照图）</dt><dd id="lc-coverage">—</dd>
+            <dt>四边形外接范围</dt><dd id="lc-bbox">—</dd>
+            <dt>四角坐标（参照图像素）</dt><dd id="lc-corners">—</dd>
+            <dt>RANSAC 内点 / 可信匹配</dt><dd id="lc-inliers">—</dd>
+            <dt>内点比例 / 内点区域支撑</dt><dd id="lc-support">—</dd>
+            <dt>重投影 RMSE</dt><dd id="lc-rmse">—</dd>
+          </dl>
+        </div>
+      </div>
+    </section>
+
     <section class="panel" id="panel-detect-upload">
       <h2><span class="num">③</span> 独立检测（可选）</h2>
       <p class="muted">上传任意图片（含水印图、截图、JPEG 转发件等）直接检测，无需先嵌入。</p>

@@ -121,6 +121,7 @@ async function runAutoEmbed(file, text, status) {
     $("#embed-meta").classList.add("hidden");
     $("#panel-attack").classList.add("disabled");
     $("#panel-matrix").classList.add("disabled");
+    $("#panel-locate").classList.add("disabled");
     $("#btn-detect-attacked").disabled = true;
     fail(status, "低 / 中 / 高三档均未同时满足「恢复文本逐字一致」与「PSNR 达标」，未创建任务；请放宽攻击参数或降低 PSNR 下限后重试。");
     return;
@@ -140,6 +141,7 @@ function applyEmbeddedJob(r, strengthNote) {
   renderDetectList();
   resetReportBox();
   resetMatrixPanel();
+  resetLocatePanel();
   showImage("watermarked", state.watermarkedUrl);
   $("#img-target").removeAttribute("src");
   $("#img-marked").removeAttribute("src");
@@ -154,6 +156,7 @@ function applyEmbeddedJob(r, strengthNote) {
 
   $("#panel-attack").classList.remove("disabled");
   $("#panel-matrix").classList.remove("disabled");
+  $("#panel-locate").classList.remove("disabled");
   $("#btn-detect-attacked").disabled = false;
   document.querySelector('.step[data-step="2"]').classList.add("active");
   switchTab("watermarked");
@@ -878,12 +881,98 @@ function formatBytes(n) {
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
+/* ---------------- 传播副本来源定位（只读） ---------------- */
+
+const CORNER_NAME = {
+  top_left: "左上 TL", top_right: "右上 TR",
+  bottom_right: "右下 BR", bottom_left: "左下 BL",
+};
+
+$("#btn-locate").addEventListener("click", async () => {
+  const status = $("#locate-status");
+  if (!state.jobId) return fail(status, "请先完成嵌入。");
+  const file = $("#locate-file").files[0];
+  if (!file) return fail(status, "请先选择一张传播副本图片。");
+
+  const fd = new FormData();
+  fd.append("image", file);
+  busy(status, "正在提取局部特征并执行 RANSAC 单应估计…");
+  $("#locate-result").classList.add("hidden");
+  try {
+    const r = await api(`/api/jobs/${state.jobId}/locate-source`,
+      { method: "POST", body: fd });
+    renderLocate(r);
+    if (r.located) {
+      ok(status, `定位成功：上传图四角已映射到参照图（覆盖率 ${(r.coverage.area_fraction * 100).toFixed(1)}%，未改写任务数据）。`);
+    } else {
+      fail(status, `无法定位：${r.reason_detail || r.reason}`);
+    }
+  } catch (err) {
+    $("#locate-result").classList.add("hidden");
+    fail(status, err.message);
+  }
+});
+
+function renderLocate(r) {
+  const box = $("#locate-result");
+  const verdict = $("#locate-verdict");
+  const reason = $("#locate-reason");
+  const detail = $("#locate-detail");
+  box.classList.remove("hidden");
+
+  if (!r.located) {
+    verdict.className = "verdict fail";
+    verdict.textContent = "✘ 无法定位";
+    reason.innerHTML =
+      `<div>原因：<b>${escapeHtml(r.reason_detail || r.reason)}</b></div>` +
+      `<small class="muted">服务端未返回任何坐标（不给出伪位置）。可换用纹理更丰富、` +
+      `裁切范围更大或质量更高的副本重试。</small>`;
+    detail.classList.add("hidden");
+    return;
+  }
+
+  verdict.className = "verdict ok";
+  verdict.textContent = "✔ 定位成功：上传图来源于参照图中的红色四边形区域";
+  reason.textContent = "";
+  detail.classList.remove("hidden");
+
+  $("#locate-preview").src = r.preview.image_data_url;
+  const s = r.stats;
+  const cov = r.coverage;
+  $("#lc-coverage").textContent =
+    `${(cov.area_fraction * 100).toFixed(2)}%` +
+    `（外接宽 ${(cov.bbox_width_fraction * 100).toFixed(1)}% × ` +
+    `高 ${(cov.bbox_height_fraction * 100).toFixed(1)}%）`;
+  $("#lc-bbox").textContent =
+    `x ${cov.bbox.min_x}–${cov.bbox.max_x}，y ${cov.bbox.min_y}–${cov.bbox.max_y}` +
+    `（参照图 ${s.reference_width}×${s.reference_height}px）`;
+  $("#lc-corners").innerHTML = r.corners.map((c) =>
+    `<span class="corner-chip">${escapeHtml(CORNER_NAME[c.label] || c.label)}：` +
+    `(${c.x}, ${c.y})</span>`).join(" ");
+  $("#lc-inliers").textContent =
+    `${s.inliers} / ${s.good_matches}` +
+    `（参照特征 ${s.keypoints_reference}，上传特征 ${s.keypoints_query}）`;
+  $("#lc-support").textContent =
+    `${(s.inlier_ratio * 100).toFixed(1)}% / ${(s.inlier_region_support * 100).toFixed(1)}%`;
+  $("#lc-rmse").textContent = `${s.rmse_px} px`;
+}
+
 /* ---------------- UI 辅助 ---------------- */
 
 function resetMatrixPanel() {
   $("#panel-matrix").classList.add("disabled");
   $("#matrix-result").classList.add("hidden");
   const st = $("#matrix-status");
+  st.className = "status";
+  st.textContent = "";
+}
+
+function resetLocatePanel() {
+  $("#panel-locate").classList.add("disabled");
+  $("#locate-result").classList.add("hidden");
+  $("#locate-detail").classList.add("hidden");
+  $("#locate-preview").removeAttribute("src");
+  const st = $("#locate-status");
   st.className = "status";
   st.textContent = "";
 }
