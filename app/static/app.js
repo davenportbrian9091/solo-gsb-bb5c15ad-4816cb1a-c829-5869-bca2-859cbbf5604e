@@ -121,6 +121,7 @@ async function runAutoEmbed(file, text, status) {
     $("#embed-meta").classList.add("hidden");
     $("#panel-attack").classList.add("disabled");
     $("#panel-matrix").classList.add("disabled");
+    $("#panel-locate").classList.add("disabled");
     $("#btn-detect-attacked").disabled = true;
     fail(status, "低 / 中 / 高三档均未同时满足「恢复文本逐字一致」与「PSNR 达标」，未创建任务；请放宽攻击参数或降低 PSNR 下限后重试。");
     return;
@@ -140,6 +141,7 @@ function applyEmbeddedJob(r, strengthNote) {
   renderDetectList();
   resetReportBox();
   resetMatrixPanel();
+  resetLocatePanel();
   showImage("watermarked", state.watermarkedUrl);
   $("#img-target").removeAttribute("src");
   $("#img-marked").removeAttribute("src");
@@ -154,6 +156,7 @@ function applyEmbeddedJob(r, strengthNote) {
 
   $("#panel-attack").classList.remove("disabled");
   $("#panel-matrix").classList.remove("disabled");
+  $("#panel-locate").classList.remove("disabled");
   $("#btn-detect-attacked").disabled = false;
   document.querySelector('.step[data-step="2"]').classList.add("active");
   switchTab("watermarked");
@@ -454,6 +457,119 @@ function renderMatrix(r) {
   } else {
     box.innerHTML = `<span class="mx-fail-text">所选组合中没有任何一格恢复出与原文一致的文本，因此不存在成功边界。</span>`;
   }
+}
+
+/* ---------------- 传播副本来源定位（只读，不写任务/归档） ---------------- */
+
+$("#btn-locate").addEventListener("click", async () => {
+  const status = $("#locate-status");
+  const file = $("#locate-file").files[0];
+  if (!state.jobId) return fail(status, "请先完成嵌入。");
+  if (!file) return fail(status, "请先选择一张传播副本图片。");
+
+  const fd = new FormData();
+  fd.append("image", file);
+  busy(status, "正在提取局部特征、执行 KNN 匹配与 RANSAC 几何校验…");
+  try {
+    const r = await api(`/api/jobs/${state.jobId}/locate`,
+                        { method: "POST", body: fd });
+    renderLocateResult(r);
+    if (r.located) {
+      ok(status, `定位成功：副本覆盖参照图 ${r.coverage_percent}%（内点 ${r.inlier_count}/${r.good_matches}）。结果只读，未写任务文件与检测归档。`);
+    } else {
+      fail(status, "无法定位：" + r.reason);
+    }
+  } catch (err) {
+    $("#locate-result").classList.add("hidden");
+    fail(status, err.message);
+  }
+});
+
+const LOCATE_CHECK_LABELS = {
+  good_matches: "良好匹配数",
+  homography: "RANSAC 单应估计",
+  inlier_count: "内点数量",
+  inlier_ratio: "内点比例",
+  quad_finite: "四角投影有效",
+  quad_shape: "四边形形状（凸性/夹角/尺度）",
+  quad_bounds: "四边形边界",
+  coverage: "面积覆盖率",
+  reprojection_rms: "重投影误差",
+};
+
+function renderLocateResult(r) {
+  const box = $("#locate-result");
+  box.classList.remove("hidden");
+  const verdict = $("#locate-verdict");
+  const failBox = $("#locate-fail-reason");
+  const img = $("#locate-preview");
+  const metrics = $("#locate-metrics");
+  const corners = $("#locate-corners");
+
+  if (r.located) {
+    verdict.className = "locate-verdict ok";
+    verdict.textContent =
+      `◎ 定位成功：该副本来自本任务含水印图，覆盖率 ${r.coverage_percent}%`;
+    failBox.classList.add("hidden");
+    failBox.textContent = "";
+    img.src = r.preview_data_url;
+    img.classList.remove("hidden");
+
+    metrics.innerHTML =
+      locateRow("参照图尺寸", `${r.reference_size.width} × ${r.reference_size.height}px`) +
+      locateRow("副本尺寸", `${r.query_size.width} × ${r.query_size.height}px`) +
+      locateRow("良好匹配 / 内点", `${r.good_matches} / ${r.inlier_count}（${(r.inlier_ratio * 100).toFixed(1)}%）`) +
+      locateRow("重投影 RMS", `${r.rms_px} px（参照图口径）`) +
+      locateRow("四边形面积", `${r.quad_area_px2.toLocaleString()} px²`) +
+      locateRow("覆盖率", `${r.coverage_percent}%`) +
+      locateRow("最小内角", `${r.min_angle_deg}°`) +
+      locateRow("两轴尺度比", `${r.axis_scale_ratio} : 1`);
+
+    corners.innerHTML =
+      `<span class="muted">副本四角在参照图中的坐标（左上原点，像素）：</span>` +
+      r.quad.map((c) =>
+        `<span class="chip locate-corner">${escapeHtml(c.label)}：` +
+        `(${c.x}, ${c.y})</span>`).join(" ");
+  } else {
+    verdict.className = "locate-verdict fail";
+    verdict.textContent = "✘ 无法定位（不提供伪位置）";
+    failBox.classList.remove("hidden");
+    failBox.innerHTML =
+      `<b>失败判定项：${escapeHtml(LOCATE_CHECK_LABELS[r.failed_check] || r.failed_check)}</b>` +
+      `<div>${escapeHtml(r.reason || "未知原因")}</div>`;
+    img.classList.add("hidden");
+    img.removeAttribute("src");
+    metrics.innerHTML =
+      locateRow("参照图特征点", r.keypoints_ref ?? "—") +
+      locateRow("副本特征点", r.keypoints_query ?? "—") +
+      locateRow("良好匹配", r.good_matches ?? "—") +
+      locateRow("RANSAC 内点",
+        r.inlier_count == null ? "—"
+          : `${r.inlier_count}（${((r.inlier_ratio ?? 0) * 100).toFixed(1)}%）`);
+    corners.innerHTML =
+      `<span class="muted">已通过 / 未通过的判定：</span>` +
+      Object.entries(r.checks || {}).map(([k, v]) =>
+        `<span class="chip locate-check ${v ? "pass" : "fail"}">` +
+        `${v ? "✔" : "✘"} ${escapeHtml(LOCATE_CHECK_LABELS[k] || k)}</span>`
+      ).join(" ");
+  }
+}
+
+function locateRow(label, value) {
+  return `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value))}</dd>`;
+}
+
+function resetLocatePanel() {
+  $("#panel-locate").classList.add("disabled");
+  $("#locate-file").value = "";
+  const st = $("#locate-status");
+  st.className = "status";
+  st.textContent = "";
+  const box = $("#locate-result");
+  box.classList.add("hidden");
+  const img = $("#locate-preview");
+  img.removeAttribute("src");
+  img.classList.add("hidden");
 }
 
 /* ---------------- 独立检测 ---------------- */

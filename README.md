@@ -32,7 +32,8 @@ docker compose up -d --build
 不依赖外部数据库或额外服务，镜像内已包含 OpenCV headless 所需系统库。
 
 嵌入水印后，在首页左栏「② 施加攻击」下方即可进入「**▦ 鲁棒性矩阵评测**」
-（同一端口、同一容器，无需额外服务或端口；compose 配置保持不变）。
+与「**◎ 传播副本来源定位**」（同一端口、同一容器，无需额外服务或端口；
+compose 配置保持不变）。访问入口与地址：**http://localhost:8000**。
 「① 嵌入水印」面板内可直接切换 **手动选强度 / 自动选强度** 两种模式。
 
 停止 / 清理：
@@ -111,6 +112,35 @@ WM_DATA_DIR=./data uvicorn app.main:app --host 0.0.0.0 --port 8000
 对应接口：`POST /api/jobs/{job_id}/robustness-matrix`
 （请求体 `{"jpeg_qualities": [90,50,30], "crop_fractions": [0.75,0.5]}`），
 访问地址即首页所在服务，无需额外端口或容器。
+
+### 传播副本来源定位（只读，在当前任务流程内）
+
+含水印图片被转发后，往往只剩一张**裁切、缩放并经 JPEG 转存**的副本。
+完成 ① 嵌入后，左栏「▦ 鲁棒性矩阵评测」下方的「**◎ 传播副本来源定位**」
+面板可用。入口：首页 **http://localhost:8000** → 左栏「◎ 传播副本来源定位」。
+
+- **用法**：上传一张从该任务 `watermarked.png` 传播得到的图片（任意裁切区域、
+  缩放比例与 JPEG 质量均可，支持 PNG / JPEG / WebP / BMP）。服务端以该任务的
+  **含水印原图为参照**，在两侧提取 **SIFT 局部特征**，经 KNN 匹配 + Lowe 比率
+  筛选后用 **RANSAC 估计单应矩阵**，把上传图的四角映射回参照图坐标。
+- **只在几何上可信时给结果**：依次要求——良好匹配数 ≥ 12、RANSAC 内点 ≥ 10、
+  内点比例 ≥ 35%、四角投影有效、投影四边形**凸且不退化**（最小内角 ≥ 15°、
+  最短边 ≥ 参照图短边 1%、两轴尺度比 ≤ 6:1）、四边形基本落在参照图边界内、
+  面积覆盖率在 0.5%~102%、内点重投影 RMS ≤ 6px。**任何一条不满足都返回
+  「无法定位」与具体失败判定项（不给出伪位置）**，页面同时展示各项通过/未通过状态。
+- **成功结果**：副本四角（左上 / 右上 / 右下 / 左下）在参照图中的像素坐标、
+  **覆盖率**（投影四边形面积 / 参照图面积）、匹配 / 内点统计、重投影误差、
+  最小内角与两轴尺度比，以及一张**多边形标注预览**（参照图缩略图 + 红色投影
+  四边形 + 角点标注，以内联 data URL 随响应返回）。
+- **只读、不改写**：定位全程在内存中完成，**不写 `target.png`、不改 `meta.json`
+  与攻击历史、不产生检测记录（`detections/`）、不生成报告、不追加归档日志**；
+  任务文件与检测归档在定位前后字节级一致。上传副本也不落盘。
+
+对应接口：`POST /api/jobs/{job_id}/locate`（multipart：`image`）。
+成功返回 200 + `located=true`；匹配不足 / 几何退化时**同样返回 200**、
+`located=false` 且 `reason` / `failed_check` 说明原因，`quad` / `coverage` /
+`preview_data_url` 为 `null`；任务不存在或为「独立检测」轻量任务返回 **404**，
+图片无法解码返回 **400**，超过 16MB 返回 **413**。
 
 ### 自动选强度嵌入（嵌入面板内）
 
@@ -324,6 +354,7 @@ WM_DATA_DIR=./data uvicorn app.main:app --host 0.0.0.0 --port 8000
 | POST | `/api/detect` | multipart：上传 `image` **或**传 `job_id`，返回文本、置信度、指标、检测记录 ID 与标注图 URL；独立上传可加 `auto_orient=true` 启用 8 方向自动检索（原向 / 90 / 180 / 270° + 水平镜像四方向），响应附带 `orientation_search`（入选方向、候选摘要、冲突），入选方向标注图已逆变换回上传图坐标 |
 | POST | `/api/jobs/{id}/robustness-matrix` | JSON：`{"jpeg_qualities": [90,50,30], "crop_fractions": [1.0,0.75,0.5]}`（各 1–3 个、不可重复；质量 20–100、比例 0.30–1.00）。**只读**：从同一份含水印原图为每格独立「先裁切后压缩」再调用现有检测器，逐格返回恢复文本 / 与原文是否一致 / 置信度与同步指标，并给出只按实测成功格计算的 `boundary`（二维最严成功边界，不做相邻推断）；不写 `target.png`、不改攻击历史、不产生检测记录与归档 |
 | POST | `/api/privacy-check` | multipart：上传 PNG/JPEG `image`，**只读**解析 EXIF 拍摄时间、相机品牌/型号、GPS（带符号十进制度）；不落盘、不建任务，字段缺失为 `null`，EXIF 损坏返回 200 + `warnings` |
+| POST | `/api/jobs/{id}/locate` | 传播副本来源定位（**只读**，multipart：`image`）：以任务 `watermarked.png` 为参照，SIFT 特征匹配 + Lowe 比率 + RANSAC 单应估计上传图四角在参照图中的位置；内点数量 / 比例、投影四边形凸性 / 面积 / 边界、重投影误差全部通过时返回 `located=true`、`quad` 四角坐标、`coverage` 覆盖率与内联 JPEG `preview_data_url`；否则 **200 + `located=false`** 与 `reason` / `failed_check`，不返回伪位置。不写任务文件、不产生检测记录与归档；任务不存在 / upload_only 轻量任务返回 404 |
 | GET | `/api/jobs/{id}/{kind}` | 下载 `original` / `watermarked` / `target` / `marked` PNG |
 | GET | `/api/jobs/{id}/detections/{det_id}/{kind}` | 下载某次检测的 `source`（检测输入快照）/ `marked`（标注图）PNG |
 | POST | `/api/jobs/{id}/reports` | JSON：`{"detection_ids": ["det_…", ...]}`（1–20 条），生成可验证报告并追加归档，返回 `report_id`、`download_url`、`verify_url` |
@@ -456,6 +487,57 @@ WM_DATA_DIR=./data uvicorn app.main:app --host 0.0.0.0 --port 8000
 > 任务不存在或为「独立检测」轻量任务（无含水印图）返回 **404**。
 > 评测为只读操作，响应中的成功/失败完全不改变任务目录与归档。
 
+传播副本来源定位响应（成功；`preview_data_url` 为省略后的 data URL）：
+
+```json
+{
+  "job_id": "756b2203d38f",
+  "filename": "forward.jpg",
+  "located": true,
+  "reason": null,
+  "failed_check": null,
+  "reference_size": { "width": 512, "height": 512 },
+  "query_size": { "width": 217, "height": 217 },
+  "keypoints_ref": 925,
+  "keypoints_query": 84,
+  "good_matches": 28,
+  "inlier_count": 26,
+  "inlier_ratio": 0.9286,
+  "rms_px": 1.11,
+  "quad": [
+    { "name": "top_left",     "label": "左上", "x": 98.28, "y": 119.7 },
+    { "name": "top_right",    "label": "右上", "x": 411.32, "y": 118.48 },
+    { "name": "bottom_right", "label": "右下", "x": 410.59, "y": 430.07 },
+    { "name": "bottom_left",  "label": "左下", "x": 100.82, "y": 429.6 }
+  ],
+  "coverage": 0.3691,
+  "coverage_percent": 36.91,
+  "quad_area_px2": 96931.5,
+  "min_angle_deg": 89.64,
+  "axis_scale_ratio": 1.002,
+  "checks": {
+    "good_matches": true, "homography": true, "inlier_count": true,
+    "inlier_ratio": true, "quad_finite": true, "quad_shape": true,
+    "quad_bounds": true, "coverage": true, "reprojection_rms": true
+  },
+  "preview_data_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg…",
+  "thresholds": {
+    "feature": "SIFT", "match_ratio": 0.75,
+    "ransac_reproj_thresh": 3.0, "min_good_matches": 12,
+    "min_inliers": 10, "min_inlier_ratio": 0.35, "max_rms_px": 6.0,
+    "min_quad_angle_deg": 15.0, "max_axis_scale_ratio": 6.0,
+    "min_coverage": 0.005, "max_coverage": 1.02
+  },
+  "stored": false
+}
+```
+
+无法定位时（HTTP **200**）`located=false`，`quad` / `coverage` /
+`preview_data_url` 均为 `null`，`failed_check` 给出首个未通过的判定项
+（`good_matches` / `inlier_count` / `inlier_ratio` / `quad_shape` /
+`quad_bounds` / `coverage` / `reprojection_rms` 等），`reason` 给出中文原因，
+`checks` 回显每一项判定的通过情况，便于人工判断是「副本无关」还是「失真过重」。
+
 隐私检查响应（节选；缺失字段为 `null`，前端显示「无」）：
 
 ```json
@@ -522,11 +604,12 @@ compose 默认把数据目录持久化到命名卷 `wm-data`；归档报告与�
 │   ├── autostrength.py   # 自动选强度：低→中→高从同一原图逐档「嵌入 + 先裁切后压缩 + 盲检」/ PSNR 达标判定（不落盘）
 │   ├── matrix.py         # 鲁棒性矩阵：质量×裁切逐格「先裁切后压缩」评测 / 实测成功格二维最严边界（只读、不落盘）
 │   ├── orientation.py    # 独立上传可选：8 方向（旋转 + 水平镜像）自动检索 / 载荷校验取舍 / 标注图逆变换
+│   ├── provenance.py     # 传播副本来源定位（只读）：SIFT 特征 + Lowe 比率 + RANSAC 单应 / 四角·覆盖率·标注预览 / 几何门限不通过则明确「无法定位」
 │   ├── exifcheck.py      # 图片隐私检查：只读解析 EXIF 拍摄时间 / 相机 / GPS（损坏不阻断、不落盘）
 │   ├── archive.py        # 检测报告：规范化 JSON / SHA-256 清单 / 仅追加哈希链归档 / 校验
-│   ├── main.py           # FastAPI：任务存储、手动/自动嵌入、攻击/检测/鲁棒性矩阵/隐私检查/报告接口、静态资源
+│   ├── main.py           # FastAPI：任务存储、手动/自动嵌入、攻击/检测/鲁棒性矩阵/来源定位/隐私检查/报告接口、静态资源
 │   └── static/
-│       ├── index.html    # 单页界面（嵌入含手动/自动选强度 / 攻击 / 鲁棒性矩阵 / 检测 / 隐私检查 / 归档 七区）
+│       ├── index.html    # 单页界面（嵌入含手动/自动选强度 / 攻击 / 鲁棒性矩阵 / 来源定位 / 检测 / 隐私检查 / 归档 八区）
 │       ├── style.css
 │       └── app.js
 ├── tests/
@@ -534,6 +617,7 @@ compose 默认把数据目录持久化到命名卷 `wm-data`；归档报告与�
 │   ├── test_autostrength.py # 自动选强度：参数校验 / 低中高顺序与逐字一致+PSNR 双条件 / 三档失败不建任务 / 接口
 │   ├── test_matrix.py    # 鲁棒性矩阵：边界偏序（严格支配/不推断缺口）/ 参数校验 / 只读不改写 / 接口
 │   ├── test_orientation.py # 自动方向检索：8 向枚举 / 同分取舍 / 冲突 / 逆变换 / 归档
+│   ├── test_provenance.py  # 传播副本来源定位：四角精度（裁切/缩放/转存）/ 无关图·平坦图拒绝 / 几何门限 / 只读不改写 / 接口
 │   ├── test_privacy.py   # 隐私检查接口：EXIF 解析 / DMS 还原 / 缺失与损坏 / 不落盘不阻断
 │   └── test_reports.py   # 报告归档接口与清单/哈希链校验（篡改、缺失、断链）
 ├── requirements.txt
@@ -569,7 +653,10 @@ archive.log.jsonl                     # 仅追加归档记录（哈希链）
 
 - 本项目定位于**教学/研究实验台**，无鉴权、任务存于本地卷，请勿直接暴露到公网。
 - 上传图片仅用于处理，不会上传到任何第三方；任务按数量自动过期清理。
-- **图片隐私检查为纯只读操作**：图片与 EXIF 元数据均不写盘、不入库，
+- **图片隐私检查为纯只读操作**：图片与 EXIF 元数据都不写盘、不入库，
   仅在请求处理期间驻留内存，结果只返回给当前请求，不创建任务、不写入攻击记录与归档。
   照片分享前建议先用该功能确认 GPS 等敏感元数据是否需要清除。
+- **传播副本来源定位同样为纯只读操作**：上传副本与参照图都只在内存中参与特征匹配，
+  不写任务文件（`meta.json` / `target.png` 等）、不产生检测记录与归档；
+  几何门限任一不通过时只返回「无法定位」及原因，绝不返回推测性坐标。
 - 数字水印的鲁棒性是概率性的，标注图与置信度用于辅助判断，不构成版权存证保证。

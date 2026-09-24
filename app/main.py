@@ -14,6 +14,12 @@
                           每格从同一份含水印原图独立「先裁切后压缩」再检测，
                           返回逐格恢复文本/一致性/指标与二维最严成功边界；
                           不改任务图片、攻击历史与检测归档
+  POST /api/jobs/{id}/locate
+                          传播副本来源定位（只读）：上传一张由 watermarked.png
+                          裁切/缩放/JPEG 转存得到的图片，SIFT 特征匹配 +
+                          RANSAC 单应估计副本四角在参照图中的位置；仅在内点
+                          数量/比例、投影四边形面积与边界均可信时返回四角、
+                          覆盖率与标注预览，否则返回「无法定位」及原因
   POST /api/privacy-check  上传 PNG/JPEG -> 只读解析 EXIF 拍摄时间/相机/GPS（不落盘、不建任务）
   GET  /api/jobs/{id}/{kind}  任务文件下载（original/watermarked/target/marked）
   GET  /api/jobs/{id}/detections/{det_id}/{kind}  某次检测的输入快照 / 标注图
@@ -38,7 +44,7 @@ from PIL import Image
 from pydantic import BaseModel
 
 from . import archive, autostrength, dctwm as wm
-from . import exifcheck, matrix, orientation
+from . import exifcheck, matrix, orientation, provenance
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -48,7 +54,7 @@ MAX_UPLOAD_BYTES = 16 * 1024 * 1024
 MAX_DIM = 4096
 ALLOWED_KINDS = {"original", "watermarked", "target", "marked"}
 
-app = FastAPI(title="抗裁切水印实验台", version="1.4.0")
+app = FastAPI(title="抗裁切水印实验台", version="1.5.0")
 
 
 # ---------------------------------------------------------------- 任务存储
@@ -381,6 +387,58 @@ def robustness_matrix(job_id: str, req: RobustnessMatrixRequest):
         raise HTTPException(status_code=400, detail=str(e))
     result["job_id"] = job_id
     result["source"] = "watermarked.png（评测前只读快照，不被改写）"
+    return JSONResponse(result)
+
+
+@app.post("/api/jobs/{job_id}/locate")
+async def locate_propagation_copy(job_id: str, image: UploadFile = File(...)):
+    """传播副本来源定位（只读、全内存）。
+
+    以该任务的 watermarked.png 为参照，对上传的传播副本（裁切 / 缩放 /
+    JPEG 转存等）做局部特征匹配 + RANSAC 单应估计，给出副本四角在参照图
+    中的位置、覆盖率与多边形标注预览。仅当匹配数、内点数 / 比例、投影
+    四边形面积与边界、重投影误差均通过门限时 located=True；否则
+    located=False 且 reason 明确说明失败的判定项，不返回伪位置。
+
+    不写任务文件、不改 meta.json 与攻击历史、不产生检测记录、不写归档。
+    """
+    _ensure_data_dir()
+    meta = _load_meta(job_id)
+    if meta.get("upload_only"):
+        raise HTTPException(status_code=404, detail="该任务没有含水印图。")
+    source = DATA_DIR / job_id / "watermarked.png"
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="该任务没有含水印图。")
+
+    data = await image.read(MAX_UPLOAD_BYTES + 1)
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="图片不能超过 16MB。")
+    if not data:
+        raise HTTPException(status_code=400, detail="上传内容为空。")
+    try:
+        query = exifcheck.open_rgb_transposed(data)
+    except exifcheck.PrivacyCheckError:
+        raise HTTPException(status_code=400, detail="无法解析上传的图片。")
+    query_rgb = np.array(query)
+    qh, qw = query_rgb.shape[:2]
+    if max(qh, qw) > MAX_DIM:
+        raise HTTPException(
+            status_code=400,
+            detail=f"图片尺寸 {qw}x{qh} 超过 {MAX_DIM}px 上限，请先缩小。")
+    if min(qh, qw) < 64:
+        raise HTTPException(
+            status_code=400,
+            detail=f"传播副本最短边至少需要 64px（当前 {min(qh, qw)}px）。")
+
+    ref_rgb = np.array(Image.open(source).convert("RGB"))
+    try:
+        result = provenance.locate_propagation_copy(ref_rgb, query_rgb)
+    except provenance.LocateError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    result["job_id"] = job_id
+    result["filename"] = image.filename
+    result["stored"] = False
+    result["source"] = "watermarked.png（定位前只读快照，不被改写）"
     return JSONResponse(result)
 
 

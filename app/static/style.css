@@ -568,6 +568,82 @@ i.mx-fail { background: rgba(235, 70, 70, 0.35); border-color: rgba(235, 70, 70,
 }
 
 
+/* ---------- 传播副本来源定位 ---------- */
+button.primary.locate {
+  background: linear-gradient(135deg, #2f9ecf, #2277a3);
+}
+button.primary.locate:hover { box-shadow: 0 4px 18px rgba(47, 158, 207, 0.35); }
+
+.locate-box {
+  margin-top: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+}
+.locate-verdict {
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 10px;
+}
+.locate-verdict.ok {
+  background: rgba(53, 208, 163, 0.1);
+  border: 1px solid rgba(53, 208, 163, 0.45);
+  color: #7ce8c8;
+}
+.locate-verdict.fail {
+  background: rgba(235, 70, 70, 0.1);
+  border: 1px solid rgba(235, 70, 70, 0.42);
+  color: #ff9c9c;
+}
+.locate-fail {
+  font-size: 12.5px;
+  color: #ffb3b3;
+  background: rgba(235, 70, 70, 0.07);
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  line-height: 1.7;
+}
+.locate-fail b { color: #ff8b8b; }
+#locate-preview {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+.locate-dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  margin: 0 0 10px;
+  font-size: 12.5px;
+}
+.locate-dl dt { color: var(--muted); }
+.locate-dl dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.locate-corners {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  font-size: 12px;
+}
+.locate-corner {
+  border-color: #3f8fb8;
+  color: #9fd8ef;
+  background: rgba(47, 158, 207, 0.12);
+  font-variant-numeric: tabular-nums;
+}
+.locate-check.pass { color: #8feccf; border-color: rgba(53, 208, 163, 0.5); }
+.locate-check.fail { color: #ff9c9c; border-color: rgba(235, 70, 70, 0.5); }
+
 /* ---------- 检测归档 ---------- */
 .detect-list {
   display: flex;

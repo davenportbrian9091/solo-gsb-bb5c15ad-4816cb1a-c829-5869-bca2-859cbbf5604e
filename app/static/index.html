@@ -177,6 +177,31 @@
       </div>
     </section>
 
+    <section class="panel disabled" id="panel-locate">
+      <h2><span class="num">◎</span> 传播副本来源定位</h2>
+      <p class="muted">
+        上传一张<b>从本任务含水印图裁切、缩放或 JPEG 转存</b>得到的图片，
+        服务端以 <code>watermarked.png</code> 为参照，用 <b>SIFT 局部特征匹配 +
+        RANSAC 单应估计</b>计算上传图四角在参照图中的位置。仅当
+        <b>内点数量、内点比例、投影四边形面积与边界</b>均可信时才给出结果；
+        匹配不足或几何退化时明确返回「无法定位」。全程只读，<b>不写任务文件与检测归档</b>。
+      </p>
+      <label class="field">
+        <span>传播副本（PNG / JPEG / WebP / BMP；建议保留一定画面内容）</span>
+        <input type="file" id="locate-file" accept="image/png,image/jpeg,image/webp,image/bmp" />
+      </label>
+      <button class="primary locate" id="btn-locate">定位副本来源</button>
+      <div class="status" id="locate-status"></div>
+
+      <div id="locate-result" class="locate-box hidden">
+        <div id="locate-verdict"></div>
+        <div id="locate-fail-reason" class="locate-fail hidden"></div>
+        <img id="locate-preview" alt="来源定位多边形标注预览" />
+        <dl class="locate-dl" id="locate-metrics"></dl>
+        <div id="locate-corners" class="locate-corners"></div>
+      </div>
+    </section>
+
     <section class="panel" id="panel-detect-upload">
       <h2><span class="num">③</span> 独立检测（可选）</h2>
       <p class="muted">上传任意图片（含水印图、截图、JPEG 转发件等）直接检测，无需先嵌入。</p>
